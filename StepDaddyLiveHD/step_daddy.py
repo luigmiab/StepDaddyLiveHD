@@ -70,6 +70,31 @@ class StepDaddy:
         m3u8_url = None
         source_url = None
 
+        # Step 1: curl_cffi scarica la pagina wrapper ed estrae l'iframe src
+        player_url = None
+        try:
+            response = await self._session.get(
+                stream_page_url,
+                headers=self._headers(referer=self._base_url),
+                impersonate="chrome120"
+            )
+            # Cerca iframe src nella pagina
+            iframe_match = re.search(r'<iframe[^>]+src=["\']([^"\']+)["\']', response.text, re.IGNORECASE)
+            if iframe_match:
+                player_url = iframe_match.group(1)
+                if player_url.startswith("//"):
+                    player_url = "https:" + player_url
+                print(f"[stream][channel={channel_id}] Found player iframe: {player_url}")
+            else:
+                print(f"[stream][channel={channel_id}] No iframe found, falling back to stream page")
+                print(f"[stream][channel={channel_id}] Page snippet: {response.text[:500]}")
+        except Exception as e:
+            print(f"[stream][channel={channel_id}] curl_cffi error: {e}")
+
+        # Fallback: se non trova iframe, usa la pagina stream direttamente
+        target_url = player_url or stream_page_url
+
+        # Step 2: Playwright apre solo il player (molto più leggero)
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
@@ -136,10 +161,14 @@ class StepDaddy:
 
             page.on("request", handle_request)
 
-            print(f"[playwright][channel={channel_id}] Opening: {stream_page_url}")
+            print(f"[playwright][channel={channel_id}] Opening player: {target_url}")
             try:
-                # domcontentloaded è più veloce di networkidle
-                await page.goto(stream_page_url, wait_until="domcontentloaded", timeout=30000)
+                await page.goto(
+                    target_url,
+                    wait_until="domcontentloaded",
+                    timeout=30000,
+                    referer=stream_page_url  # il player si aspetta il referer della pagina madre
+                )
             except Exception as e:
                 print(f"[playwright][channel={channel_id}] goto error: {e}")
 
@@ -176,7 +205,7 @@ class StepDaddy:
             if not m3u8_url:
                 try:
                     content = await page.content()
-                    print(f"[playwright][channel={channel_id}] Page snippet: {content[:1000]}")
+                    print(f"[playwright][channel={channel_id}] Page snippet: {content[:500]}")
                 except Exception:
                     pass
 
@@ -186,7 +215,7 @@ class StepDaddy:
             raise ValueError(f"Failed to intercept m3u8 URL for channel {channel_id}")
 
         if not source_url:
-            source_url = stream_page_url
+            source_url = target_url
 
         # Scarica il contenuto m3u8 intercettato
         m3u8 = await self._session.get(
