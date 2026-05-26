@@ -151,8 +151,8 @@ class StepDaddy:
                 # Log ogni richiesta che contiene parole chiave stream
                 if any(ext in url for ext in [".m3u8", ".ts", "stream", "playlist", "manifest"]):
                     print(f"[playwright][channel={channel_id}] Intercepted: {url}")
-                # Pattern allargato: qualsiasi .m3u8 che non sia la pagina stessa
-                if url.endswith(".m3u8") and stream_page_url not in url:
+                # FIX: usa 'in' invece di 'endswith' per gestire URL con query string
+                if ".m3u8" in url and stream_page_url not in url:
                     print(f"[playwright][channel={channel_id}] ✅ Found m3u8: {url}")
                     m3u8_url = url
                     referer = request.headers.get("referer", "")
