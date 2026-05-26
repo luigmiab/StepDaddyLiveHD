@@ -77,23 +77,41 @@ class StepDaddy:
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
-                    # Nasconde headless mode
                     "--disable-blink-features=AutomationControlled",
                 ]
             )
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                            "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
-                # Sovrascrive Sec-Ch-Ua senza HeadlessChrome
-                extra_http_headers={
-                    "Sec-Ch-Ua": '"Chromium";v="136", "Google Chrome";v="136", "Not.A/Brand";v="99"',
-                    "Sec-Ch-Ua-Mobile": "?0",
-                    "Sec-Ch-Ua-Platform": '"Windows"',
-                }
             )
             page = await context.new_page()
 
-            # Stealth manuale — nasconde navigator.webdriver e HeadlessChrome
+            # Sovrascrive Sec-Ch-Ua a livello CDP — unico modo per rimuovere HeadlessChrome
+            client = await context.new_cdp_session(page)
+            await client.send("Emulation.setUserAgentOverride", {
+                "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                             "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+                "userAgentMetadata": {
+                    "brands": [
+                        {"brand": "Chromium", "version": "136"},
+                        {"brand": "Google Chrome", "version": "136"},
+                        {"brand": "Not.A/Brand", "version": "99"},
+                    ],
+                    "fullVersionList": [
+                        {"brand": "Chromium", "version": "136.0.7103.25"},
+                        {"brand": "Google Chrome", "version": "136.0.7103.25"},
+                        {"brand": "Not.A/Brand", "version": "99.0.0.0"},
+                    ],
+                    "fullVersion": "136.0.7103.25",
+                    "platform": "Windows",
+                    "platformVersion": "10.0.0",
+                    "architecture": "x86",
+                    "model": "",
+                    "mobile": False,
+                }
+            })
+
+            # Stealth manuale — nasconde navigator.webdriver
             await page.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
                 window.chrome = { runtime: {} };
