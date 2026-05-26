@@ -1,13 +1,30 @@
+# Fix: `ttf-unifont` / `ttf-ubuntu-font-family` non disponibili su Debian
+
+## Problema
+
+`playwright install chromium --with-deps` usa pacchetti Ubuntu che non esistono su Debian:
+```
+E: Package 'ttf-unifont' has no installation candidate
+E: Package 'ttf-ubuntu-font-family' has no installation candidate
+```
+
+`python:3.13` è basata su **Debian**, non Ubuntu.
+
+## Soluzione
+
+Installare tutte le dipendenze manualmente (versioni Debian) e usare
+`playwright install chromium` **senza `--with-deps`**.
+
+## File da modificare: `Dockerfile`
+
+### Contenuto completo corretto
+
+```dockerfile
 ARG PORT=3000
 ARG PROXY_CONTENT=TRUE
 ARG SOCKS5
-
-# Only set for local/direct access. When TLS is used, the API_URL is assumed to be the same as the frontend.
 ARG API_URL
 
-# It uses a reverse proxy to serve the frontend statically and proxy to backend
-# from a single exposed port, expecting TLS termination to be handled at the
-# edge by the given platform.
 FROM python:3.13 AS builder
 
 RUN mkdir -p /app/.web
@@ -16,7 +33,6 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 WORKDIR /app
 
-# Install python app requirements and reflex in the container
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
@@ -50,19 +66,15 @@ RUN apt-get update -y && apt-get install -y \
 ENV PLAYWRIGHT_BROWSERS_PATH=/app/.playwright
 RUN playwright install chromium
 
-# Install reflex helper utilities like bun/node
 COPY rxconfig.py ./
 RUN reflex init
 
-# Copy local context to `/app` inside container (see .dockerignore)
 COPY . .
 
 ARG PORT API_URL PROXY_CONTENT SOCKS5
-# Download other npm dependencies and compile frontend
 RUN REFLEX_API_URL=${API_URL:-http://localhost:$PORT} reflex export --loglevel debug --frontend-only --no-zip && mv .web/build/client/* /srv/ && rm -rf .web
 
 
-# Final image with only necessary files
 FROM python:3.13-slim
 
 RUN apt-get update -y && apt-get install -y \
@@ -104,12 +116,19 @@ WORKDIR /app
 COPY --from=builder /app /app
 COPY --from=builder /srv /srv
 
-# Needed until Reflex properly passes SIGTERM on backend.
 STOPSIGNAL SIGKILL
-
 EXPOSE $PORT
 
-# Starting the backend.
 CMD caddy start && \
     redis-server --daemonize yes && \
     exec reflex run --env prod --backend-only
+```
+
+## Riepilogo fix
+
+| Problema | Fix |
+|---|---|
+| `ttf-unifont` non trovato su Debian | Sostituito con `fonts-unifont` (nome Debian) |
+| `ttf-ubuntu-font-family` non trovato | Rimosso — non esiste su Debian, `fonts-liberation` è sufficiente |
+| `--with-deps` usa lista Ubuntu | Rimosso `--with-deps`, dipendenze installate manualmente |
+| Builder e stage finale allineati | Stessa lista pacchetti in entrambi gli stage |
