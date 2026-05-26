@@ -19,6 +19,7 @@ WORKDIR /app
 # Install python app requirements and reflex in the container
 COPY requirements.txt .
 RUN pip install -r requirements.txt
+RUN playwright install chromium --with-deps
 
 # Install reflex helper utilities like bun/node
 COPY rxconfig.py ./
@@ -37,6 +38,8 @@ FROM python:3.13-slim
 
 # Install Caddy and redis server inside image
 RUN apt-get update -y && apt-get install -y caddy redis-server && rm -rf /var/lib/apt/lists/*
+RUN pip install playwright==1.52.0 && \
+    playwright install chromium --with-deps
 
 ARG PORT API_URL
 ENV PATH="/app/.venv/bin:$PATH" PORT=$PORT REFLEX_API_URL=${API_URL:-http://localhost:$PORT} REDIS_URL=redis://localhost PYTHONUNBUFFERED=1 PROXY_CONTENT=${PROXY_CONTENT:-TRUE} SOCKS5=${SOCKS5:-""}

@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from playwright.async_api import async_playwright
 from pydantic import BaseModel
 from urllib.parse import quote, urlparse
 from curl_cffi import AsyncSession
@@ -65,46 +66,70 @@ class StepDaddy:
             raise
 
     async def stream(self, channel_id: str):
-        key = "CHANNEL_KEY"
-        url = f"{self._base_url}/stream/stream-{channel_id}.php"
-        response = await self._session.get(url, headers=self._headers())
-        matches = re.compile("iframe src=\"(.*)\" width").findall(response.text)
-        if matches:
-            source_url = matches[0]
-            source_response = await self._session.get(source_url, headers=self._headers(url))
-        else:
-            raise ValueError("Failed to find source URL for channel")
+        stream_page_url = f"{self._base_url}/stream/stream-{channel_id}.php"
+        m3u8_url = None
+        source_url = None
 
-        channel_key = re.compile(rf"const\s+{re.escape(key)}\s*=\s*\"(.*?)\";").findall(source_response.text)[-1]
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+            )
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            page = await context.new_page()
 
-        data = decode_bundle(source_response.text)
-        auth_ts = data.get("b_ts", "")
-        auth_sig = data.get("b_sig", "")
-        auth_rnd = data.get("b_rnd", "")
-        auth_url = data.get("b_host", "")
-        auth_request_url = f"{auth_url}auth.php?channel_id={channel_key}&ts={auth_ts}&rnd={auth_rnd}&sig={auth_sig}"
-        auth_response = await self._session.get(auth_request_url, headers=self._headers(source_url))
-        if auth_response.status_code != 200:
-            raise ValueError("Failed to get auth response")
-        key_url = urlparse(source_url)
-        key_url = f"{key_url.scheme}://{key_url.netloc}/server_lookup.php?channel_id={channel_key}"
-        key_response = await self._session.get(key_url, headers=self._headers(source_url))
-        server_key = key_response.json().get("server_key")
-        if not server_key:
-            raise ValueError("No server key found in response")
-        if server_key == "top1/cdn":
-            server_url = f"https://top1.newkso.ru/top1/cdn/{channel_key}/mono.m3u8"
-        else:
-            server_url = f"https://{server_key}new.newkso.ru/{server_key}/{channel_key}/mono.m3u8"
-        m3u8 = await self._session.get(server_url, headers=self._headers(quote(str(source_url))))
+            # Intercetta tutte le richieste di rete
+            async def handle_request(request):
+                nonlocal m3u8_url, source_url
+                url = request.url
+                if "mono.m3u8" in url or (url.endswith(".m3u8") and "newkso" in url):
+                    m3u8_url = url
+                    # Ricava il source_url dal referer della richiesta
+                    referer = request.headers.get("referer", "")
+                    if referer:
+                        source_url = referer
+
+            page.on("request", handle_request)
+
+            # Apri la pagina stream — il JS si esegue e genera i token
+            await page.goto(stream_page_url, wait_until="networkidle", timeout=30000)
+
+            # Aspetta fino a 15 secondi che il m3u8 venga intercettato
+            for _ in range(30):
+                if m3u8_url:
+                    break
+                await page.wait_for_timeout(500)
+
+            await browser.close()
+
+        if not m3u8_url:
+            raise ValueError(f"Failed to intercept m3u8 URL for channel {channel_id}")
+
+        if not source_url:
+            source_url = stream_page_url
+
+        # Scarica il contenuto m3u8 intercettato
+        m3u8 = await self._session.get(
+            m3u8_url,
+            headers=self._headers(referer=source_url),
+            impersonate="chrome120"
+        )
+
         m3u8_data = ""
         for line in m3u8.text.split("\n"):
             if line.startswith("#EXT-X-KEY:"):
                 original_url = re.search(r'URI="(.*?)"', line).group(1)
-                line = line.replace(original_url, f"{config.api_url}/key/{encrypt(original_url)}/{encrypt(urlparse(source_url).netloc)}")
+                line = line.replace(
+                    original_url,
+                    f"{config.api_url}/key/{encrypt(original_url)}/{encrypt(urlparse(source_url).netloc)}"
+                )
             elif line.startswith("http") and config.proxy_content:
                 line = f"{config.api_url}/content/{encrypt(line)}"
             m3u8_data += line + "\n"
+
         return m3u8_data
 
     async def key(self, url: str, host: str):
