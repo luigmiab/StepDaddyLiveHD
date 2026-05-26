@@ -3,7 +3,7 @@ import os
 import re
 from playwright.async_api import async_playwright
 from pydantic import BaseModel
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlparse, urljoin
 from curl_cffi import AsyncSession
 from typing import List
 from .utils import encrypt, decrypt, urlsafe_base64, decode_bundle
@@ -224,16 +224,31 @@ class StepDaddy:
             impersonate="chrome120"
         )
 
+        # LOG TEMPORANEO — rimuovere dopo diagnosi
+        print(f"[stream][channel={channel_id}] m3u8 content:\n{m3u8.text[:1000]}")
+
+        m3u8_base_url = m3u8_url.split("?")[0].rsplit("/", 1)[0] + "/"
+
         m3u8_data = ""
         for line in m3u8.text.split("\n"):
+            line = line.strip()
             if line.startswith("#EXT-X-KEY:"):
                 original_url = re.search(r'URI="(.*?)"', line).group(1)
+                # Risolvi URL relativa se necessario
+                if not original_url.startswith("http"):
+                    original_url_abs = urljoin(m3u8_base_url, original_url)
+                    line = line.replace(f'URI="{original_url}"', f'URI="{original_url_abs}"')
+                    original_url = original_url_abs
                 line = line.replace(
                     original_url,
                     f"{config.api_url}/key/{encrypt(original_url)}/{encrypt(urlparse(source_url).netloc)}"
                 )
-            elif line.startswith("http") and config.proxy_content:
-                line = f"{config.api_url}/content/{encrypt(line)}"
+            elif not line.startswith("#") and line != "":
+                # Segmento — può essere URL assoluto o relativo
+                if not line.startswith("http"):
+                    line = urljoin(m3u8_base_url, line)
+                if config.proxy_content:
+                    line = f"{config.api_url}/content/{encrypt(line)}"
             m3u8_data += line + "\n"
 
         return m3u8_data
