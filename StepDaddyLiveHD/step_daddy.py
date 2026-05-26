@@ -1,8 +1,6 @@
 import json
 import os
 import re
-import time
-import asyncio
 from playwright.async_api import async_playwright
 from pydantic import BaseModel
 from urllib.parse import quote, urlparse, urljoin
@@ -39,33 +37,6 @@ class StepDaddy:
         self.channels = []
         with open("StepDaddyLiveHD/meta.json", "r") as f:
             self._meta = json.load(f)
-            
-        self._browser_pool = asyncio.Queue()
-        self._playwright = None
-        self._stream_cache = {}
-        self._stream_locks = {}
-
-    async def start(self):
-        self._playwright = await async_playwright().start()
-        pool_size = getattr(config, "playwright_pool_size", 3)
-        for _ in range(pool_size):
-            browser = await self._playwright.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-blink-features=AutomationControlled",
-                ]
-            )
-            self._browser_pool.put_nowait(browser)
-
-    async def stop(self):
-        while not self._browser_pool.empty():
-            browser = self._browser_pool.get_nowait()
-            await browser.close()
-        if self._playwright:
-            await self._playwright.stop()
 
     def _headers(self, referer: str = None, origin: str = None):
         if referer is None:
@@ -103,184 +74,184 @@ class StepDaddy:
             raise
 
     async def stream(self, channel_id: str):
-        if channel_id not in self._stream_locks:
-            self._stream_locks[channel_id] = asyncio.Lock()
+        stream_page_url = f"{self._base_url}/stream/stream-{channel_id}.php"
+        m3u8_url = None
+        source_url = None
 
-        async with self._stream_locks[channel_id]:
-            cached = self._stream_cache.get(channel_id)
-            if cached and (time.time() - cached[1]) < 30:
-                return cached[0]
-
-            stream_page_url = f"{self._base_url}/stream/stream-{channel_id}.php"
-            m3u8_url = None
-            source_url = None
-
-            # Step 1: curl_cffi scarica la pagina wrapper ed estrae l'iframe src
-            player_url = None
-            try:
-                response = await self._session.get(
-                    stream_page_url,
-                    headers=self._headers(referer=self._base_url),
-                    impersonate="chrome120"
-                )
-                # Cerca iframe src nella pagina
-                iframe_match = re.search(r'<iframe[^>]+src=["\']([^"\']+)["\']', response.text, re.IGNORECASE)
-                if iframe_match:
-                    player_url = iframe_match.group(1)
-                    if player_url.startswith("//"):
-                        player_url = "https:" + player_url
-                    print(f"[stream][channel={channel_id}] Found player iframe: {player_url}")
-                else:
-                    print(f"[stream][channel={channel_id}] No iframe found, falling back to stream page")
-                    print(f"[stream][channel={channel_id}] Page snippet: {response.text[:500]}")
-            except Exception as e:
-                print(f"[stream][channel={channel_id}] curl_cffi error: {e}")
-
-            # Fallback: se non trova iframe, usa la pagina stream direttamente
-            target_url = player_url or stream_page_url
-
-            # Step 2: Playwright apre solo il player (molto più leggero) usando il pool
-            browser = await self._browser_pool.get()
-            try:
-                context = await browser.new_context(
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                               "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
-                )
-                page = await context.new_page()
-
-                # Sovrascrive Sec-Ch-Ua a livello CDP — unico modo per rimuovere HeadlessChrome
-                client = await context.new_cdp_session(page)
-                await client.send("Emulation.setUserAgentOverride", {
-                    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                                 "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
-                    "userAgentMetadata": {
-                        "brands": [
-                            {"brand": "Chromium", "version": "136"},
-                            {"brand": "Google Chrome", "version": "136"},
-                            {"brand": "Not.A/Brand", "version": "99"},
-                        ],
-                        "fullVersionList": [
-                            {"brand": "Chromium", "version": "136.0.7103.25"},
-                            {"brand": "Google Chrome", "version": "136.0.7103.25"},
-                            {"brand": "Not.A/Brand", "version": "99.0.0.0"},
-                        ],
-                        "fullVersion": "136.0.7103.25",
-                        "platform": "Windows",
-                        "platformVersion": "10.0.0",
-                        "architecture": "x86",
-                        "model": "",
-                        "mobile": False,
-                    }
-                })
-
-                # Stealth manuale — nasconde navigator.webdriver
-                await page.add_init_script("""
-                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                    window.chrome = { runtime: {} };
-                    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
-                    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-                """)
-
-                # Blocca tutto il tracking/ads per velocizzare
-                async def block_or_continue(route):
-                    url = route.request.url
-                    if any(domain in url for domain in BLOCKED_DOMAINS):
-                        await route.abort()
-                    else:
-                        await route.continue_()
-
-                await page.route("**/*", block_or_continue)
-
-                # Intercetta TUTTE le richieste — logga tutto per debug
-                async def handle_request(request):
-                    nonlocal m3u8_url, source_url
-                    url = request.url
-                    # Log ogni richiesta che contiene parole chiave stream
-                    if any(ext in url for ext in [".m3u8", ".ts", "stream", "playlist", "manifest"]):
-                        print(f"[playwright][channel={channel_id}] Intercepted: {url}")
-                    # FIX: usa 'in' invece di 'endswith' per gestire URL con query string
-                    if ".m3u8" in url and stream_page_url not in url:
-                        print(f"[playwright][channel={channel_id}] ✅ Found m3u8: {url}")
-                        m3u8_url = url
-                        referer = request.headers.get("referer", "")
-                        if referer:
-                            source_url = referer
-
-                page.on("request", handle_request)
-
-                print(f"[playwright][channel={channel_id}] Opening player: {target_url}")
-                try:
-                    await page.goto(
-                        target_url,
-                        wait_until="commit",      # non aspettare networkidle
-                        timeout=15000,
-                        referer=stream_page_url  # il player si aspetta il referer della pagina madre
-                    )
-                except Exception as e:
-                    print(f"[playwright][channel={channel_id}] goto error: {e}")
-
-                # Aspetta il m3u8 — massimo 8 secondi
-                for _ in range(80):
-                    if m3u8_url:
-                        break
-                    await page.wait_for_timeout(100)
-
-                await context.close()
-            finally:
-                try:
-                    await browser.contexts()  # lancia eccezione se crashato
-                    self._browser_pool.put_nowait(browser)
-                except Exception:
-                    new_browser = await self._playwright.chromium.launch(
-                        headless=True,
-                        args=[
-                            "--no-sandbox",
-                            "--disable-setuid-sandbox",
-                            "--disable-dev-shm-usage",
-                            "--disable-blink-features=AutomationControlled"
-                        ]
-                    )
-                    self._browser_pool.put_nowait(new_browser)
-
-            if not m3u8_url:
-                raise ValueError(f"Failed to intercept m3u8 URL for channel {channel_id}")
-
-            if not source_url:
-                source_url = target_url
-
-            # Scarica il contenuto m3u8 intercettato
-            m3u8 = await self._session.get(
-                m3u8_url,
-                headers=self._headers(referer=source_url),
+        # Step 1: curl_cffi scarica la pagina wrapper ed estrae l'iframe src
+        player_url = None
+        try:
+            response = await self._session.get(
+                stream_page_url,
+                headers=self._headers(referer=self._base_url),
                 impersonate="chrome120"
             )
+            # Cerca iframe src nella pagina
+            iframe_match = re.search(r'<iframe[^>]+src=["\']([^"\']+)["\']', response.text, re.IGNORECASE)
+            if iframe_match:
+                player_url = iframe_match.group(1)
+                if player_url.startswith("//"):
+                    player_url = "https:" + player_url
+                print(f"[stream][channel={channel_id}] Found player iframe: {player_url}")
+            else:
+                print(f"[stream][channel={channel_id}] No iframe found, falling back to stream page")
+                print(f"[stream][channel={channel_id}] Page snippet: {response.text[:500]}")
+        except Exception as e:
+            print(f"[stream][channel={channel_id}] curl_cffi error: {e}")
 
-            m3u8_base_url = m3u8_url.split("?")[0].rsplit("/", 1)[0] + "/"
+        # Fallback: se non trova iframe, usa la pagina stream direttamente
+        target_url = player_url or stream_page_url
 
-            m3u8_data = ""
-            for line in m3u8.text.split("\n"):
-                line = line.strip()
-                if line.startswith("#EXT-X-KEY:"):
-                    original_url = re.search(r'URI="(.*?)"', line).group(1)
-                    # Risolvi URL relativa se necessario
-                    if not original_url.startswith("http"):
-                        original_url_abs = urljoin(m3u8_base_url, original_url)
-                        line = line.replace(f'URI="{original_url}"', f'URI="{original_url_abs}"')
-                        original_url = original_url_abs
-                    line = line.replace(
-                        original_url,
-                        f"{config.api_url}/key/{encrypt(original_url)}/{encrypt(urlparse(source_url).netloc)}"
-                    )
-                elif not line.startswith("#") and line != "":
-                    # Segmento — può essere URL assoluto o relativo
-                    if not line.startswith("http"):
-                        line = urljoin(m3u8_base_url, line)
-                    if config.proxy_content:
-                        line = f"{config.api_url}/content/{encrypt(line)}"
-                m3u8_data += line + "\n"
+        # ── DEBUG: scarica l'HTML della player page e loggalo ──────────────
+        if player_url:
+            try:
+                player_response = await self._session.get(
+                    player_url,
+                    headers=self._headers(referer=stream_page_url),
+                    impersonate="chrome120"
+                )
+                print(f"[stream][channel={channel_id}] player HTML:\n{player_response.text[:3000]}")
+            except Exception as e:
+                print(f"[stream][channel={channel_id}] player HTML fetch error: {e}")
+        # ───────────────────────────────────────────────────────────────────
 
-            self._stream_cache[channel_id] = (m3u8_data, time.time())
-            return m3u8_data
+        # Step 2: Playwright apre solo il player (molto più leggero)
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled",
+                ]
+            )
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+            )
+            page = await context.new_page()
+
+            # Blocca tutto il tracking/ads per velocizzare
+            async def block_or_continue(route):
+                url = route.request.url
+                if any(domain in url for domain in BLOCKED_DOMAINS):
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            await page.route("**/*", block_or_continue)
+
+            # Sovrascrive Sec-Ch-Ua a livello CDP — unico modo per rimuovere HeadlessChrome
+            client = await context.new_cdp_session(page)
+            await client.send("Emulation.setUserAgentOverride", {
+                "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                             "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+                "userAgentMetadata": {
+                    "brands": [
+                        {"brand": "Chromium", "version": "136"},
+                        {"brand": "Google Chrome", "version": "136"},
+                        {"brand": "Not.A/Brand", "version": "99"},
+                    ],
+                    "fullVersionList": [
+                        {"brand": "Chromium", "version": "136.0.7103.25"},
+                        {"brand": "Google Chrome", "version": "136.0.7103.25"},
+                        {"brand": "Not.A/Brand", "version": "99.0.0.0"},
+                    ],
+                    "fullVersion": "136.0.7103.25",
+                    "platform": "Windows",
+                    "platformVersion": "10.0.0",
+                    "architecture": "x86",
+                    "model": "",
+                    "mobile": False,
+                }
+            })
+
+            # Stealth manuale — nasconde navigator.webdriver
+            await page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                window.chrome = { runtime: {} };
+                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            """)
+
+            # Intercetta TUTTE le richieste — logga tutto per debug
+            async def handle_request(request):
+                nonlocal m3u8_url, source_url
+                url = request.url
+                # Log ogni richiesta che contiene parole chiave stream
+                if any(ext in url for ext in [".m3u8", ".ts", "stream", "playlist", "manifest"]):
+                    print(f"[playwright][channel={channel_id}] Intercepted: {url}")
+                # FIX: usa 'in' invece di 'endswith' per gestire URL con query string
+                if ".m3u8" in url and stream_page_url not in url:
+                    print(f"[playwright][channel={channel_id}] ✅ Found m3u8: {url}")
+                    m3u8_url = url
+                    referer = request.headers.get("referer", "")
+                    if referer:
+                        source_url = referer
+
+            page.on("request", handle_request)
+
+            print(f"[playwright][channel={channel_id}] Opening player: {target_url}")
+            try:
+                await page.goto(
+                    target_url,
+                    wait_until="commit",      # non aspettare networkidle
+                    timeout=15000,
+                    referer=stream_page_url  # il player si aspetta il referer della pagina madre
+                )
+            except Exception as e:
+                print(f"[playwright][channel={channel_id}] goto error: {e}")
+
+            # Aspetta il m3u8 — massimo 8 secondi
+            for _ in range(80):
+                if m3u8_url:
+                    break
+                await page.wait_for_timeout(100)
+
+            await browser.close()
+
+        if not m3u8_url:
+            raise ValueError(f"Failed to intercept m3u8 URL for channel {channel_id}")
+
+        if not source_url:
+            source_url = target_url
+
+        # Scarica il contenuto m3u8 intercettato
+        m3u8 = await self._session.get(
+            m3u8_url,
+            headers=self._headers(referer=source_url),
+            impersonate="chrome120"
+        )
+
+        # LOG TEMPORANEO — rimuovere dopo diagnosi
+        print(f"[stream][channel={channel_id}] m3u8 content:\n{m3u8.text[:1000]}")
+
+        m3u8_base_url = m3u8_url.split("?")[0].rsplit("/", 1)[0] + "/"
+
+        m3u8_data = ""
+        for line in m3u8.text.split("\n"):
+            line = line.strip()
+            if line.startswith("#EXT-X-KEY:"):
+                original_url = re.search(r'URI="(.*?)"', line).group(1)
+                # Risolvi URL relativa se necessario
+                if not original_url.startswith("http"):
+                    original_url_abs = urljoin(m3u8_base_url, original_url)
+                    line = line.replace(f'URI="{original_url}"', f'URI="{original_url_abs}"')
+                    original_url = original_url_abs
+                line = line.replace(
+                    original_url,
+                    f"{config.api_url}/key/{encrypt(original_url)}/{encrypt(urlparse(source_url).netloc)}"
+                )
+            elif not line.startswith("#") and line != "":
+                # Segmento — può essere URL assoluto o relativo
+                if not line.startswith("http"):
+                    line = urljoin(m3u8_base_url, line)
+                if config.proxy_content:
+                    line = f"{config.api_url}/content/{encrypt(line)}"
+            m3u8_data += line + "\n"
+
+        return m3u8_data
 
     async def key(self, url: str, host: str):
         url = decrypt(url)
