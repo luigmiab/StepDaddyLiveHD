@@ -10,6 +10,12 @@ services:
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=0
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "warp-cli", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
     ports:
       - "1080:1080"
 
@@ -31,6 +37,7 @@ services:
       - "${PORT:-3000}:${PORT:-3000}"
     restart: unless-stopped
     depends_on:
-      - warp
+      warp:
+        condition: service_healthy
     env_file:
       - .env

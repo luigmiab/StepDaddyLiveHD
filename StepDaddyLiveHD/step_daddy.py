@@ -56,8 +56,13 @@ class StepDaddy:
                 if logo:
                     logo = f"{config.api_url}/logo/{urlsafe_base64(logo)}"
                 channels.append(Channel(id=channel_id, name=channel_name, tags=meta.get("tags", []), logo=logo))
-        finally:
+            # Aggiorna solo se il fetch è andato a buon fine
             self.channels = sorted(channels, key=lambda channel: (channel.name.startswith("18"), channel.name))
+            print(f"[load_channels] Loaded {len(self.channels)} channels.")
+        except Exception as e:
+            # NON azzera self.channels — mantiene i canali precedenti se disponibili
+            print(f"[load_channels] Error loading channels: {e}")
+            raise
 
     async def stream(self, channel_id: str):
         key = "CHANNEL_KEY"

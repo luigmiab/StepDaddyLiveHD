@@ -56,7 +56,10 @@ async def update_channels():
             await step_daddy.load_channels()
             await asyncio.sleep(300)
         except asyncio.CancelledError:
-            continue
+            raise  # permette al task di terminare correttamente
+        except Exception as e:
+            print(f"[update_channels] Retrying in 30s after error: {e}")
+            await asyncio.sleep(30)  # retry veloce in caso di errore
 
 
 def get_channels():
