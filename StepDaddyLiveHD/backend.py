@@ -5,10 +5,18 @@ from StepDaddyLiveHD.step_daddy import StepDaddy, Channel
 from fastapi import Response, status, FastAPI
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from .utils import urlsafe_base64_decode
+from contextlib import asynccontextmanager
 
 
-fastapi_app = FastAPI()
 step_daddy = StepDaddy()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await step_daddy.start()
+    yield
+    await step_daddy.stop()
+
+fastapi_app = FastAPI(lifespan=lifespan)
 client = httpx.AsyncClient(http2=True, timeout=None, verify=False)
 
 
