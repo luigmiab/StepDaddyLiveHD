@@ -1,4 +1,18 @@
 services:
+  warp:
+    build:
+      context: ./warp
+      dockerfile: Dockerfile
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+    restart: unless-stopped
+    ports:
+      - "1080:1080"
+
   step-daddy-live-hd:
     build:
       context: .
@@ -7,20 +21,16 @@ services:
         PORT: ${PORT:-3000}
         API_URL: ${API_URL:-}
         PROXY_CONTENT: ${PROXY_CONTENT:-TRUE}
-        SOCKS5: ${SOCKS5:-}
+        SOCKS5: warp:1080
     environment:
       - PORT=${PORT:-3000}
       - API_URL=${API_URL:-}
       - PROXY_CONTENT=${PROXY_CONTENT:-TRUE}
-      - SOCKS5=${SOCKS5:-}
+      - SOCKS5=warp:1080
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
     restart: unless-stopped
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    sysctls:
-      - net.ipv6.conf.all.disable_ipv6=0
+    depends_on:
+      - warp
     env_file:
       - .env
