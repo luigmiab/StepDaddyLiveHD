@@ -11,6 +11,14 @@ from rxconfig import config
 import html
 
 
+BLOCKED_DOMAINS = [
+    "sharethis.com", "dtscout.com", "dtscdn.com", "tynt.com",
+    "lijit.com", "pxdrop.lijit.com", "33across.com", "histats.com",
+    "adexchangerapid.com", "whos.amung.us", "adsco.re", "xadsmart.com",
+    "doubleclick.net", "googlesyndication.com", "googletagmanager.com",
+    "facebook.net", "amazon-adsystem.com",
+]
+
 class Channel(BaseModel):
     id: str
     name: str
@@ -124,6 +132,16 @@ class StepDaddy:
             )
             page = await context.new_page()
 
+            # Blocca tutto il tracking/ads per velocizzare
+            async def block_or_continue(route):
+                url = route.request.url
+                if any(domain in url for domain in BLOCKED_DOMAINS):
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            await page.route("**/*", block_or_continue)
+
             # Sovrascrive Sec-Ch-Ua a livello CDP — unico modo per rimuovere HeadlessChrome
             client = await context.new_cdp_session(page)
             await client.send("Emulation.setUserAgentOverride", {
@@ -178,49 +196,18 @@ class StepDaddy:
             try:
                 await page.goto(
                     target_url,
-                    wait_until="domcontentloaded",
-                    timeout=30000,
+                    wait_until="commit",      # non aspettare networkidle
+                    timeout=15000,
                     referer=stream_page_url  # il player si aspetta il referer della pagina madre
                 )
             except Exception as e:
                 print(f"[playwright][channel={channel_id}] goto error: {e}")
 
-            # Aspetta che la pagina si stabilizzi
-            await page.wait_for_timeout(3000)
-
-            # Prova a cliccare il play button se esiste
-            for selector in [
-                ".vjs-play-button",
-                ".jw-icon-playback",
-                "video",
-                ".jwplayer",
-                "[class*='play']",
-            ]:
-                try:
-                    element = await page.query_selector(selector)
-                    if element:
-                        print(f"[playwright][channel={channel_id}] Clicking: {selector}")
-                        await element.click()
-                        await page.wait_for_timeout(1000)
-                        break
-                except Exception:
-                    pass
-
-            # Aspetta fino a 30 secondi che il m3u8 venga intercettato
-            for i in range(60):
+            # Aspetta il m3u8 — massimo 8 secondi
+            for _ in range(80):
                 if m3u8_url:
                     break
-                await page.wait_for_timeout(500)
-                if i % 10 == 0:
-                    print(f"[playwright][channel={channel_id}] Waiting... {i/2}s")
-
-            # Se ancora non trovato, logga il contenuto della pagina
-            if not m3u8_url:
-                try:
-                    content = await page.content()
-                    print(f"[playwright][channel={channel_id}] Page snippet: {content[:500]}")
-                except Exception:
-                    pass
+                await page.wait_for_timeout(100)
 
             await browser.close()
 
