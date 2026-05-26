@@ -19,17 +19,14 @@ services:
         PORT: ${PORT:-3000}
         API_URL: ${API_URL:-}
         PROXY_CONTENT: ${PROXY_CONTENT:-TRUE}
-        SOCKS5: warp:40000
+        SOCKS5: ${SOCKS5:-}
     environment:
       - PORT=${PORT:-3000}
       - API_URL=${API_URL:-}
       - PROXY_CONTENT=${PROXY_CONTENT:-TRUE}
-      - SOCKS5=warp:40000
+      - SOCKS5=${SOCKS5:-}
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
     restart: unless-stopped
-    depends_on:
-      warp:
-        condition: service_started
     env_file:
       - .env
