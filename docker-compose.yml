@@ -10,12 +10,6 @@ services:
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=0
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "warp-cli", "status"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 15s
 
   step-daddy-live-hd:
     build:
@@ -36,6 +30,6 @@ services:
     restart: unless-stopped
     depends_on:
       warp:
-        condition: service_healthy
+        condition: service_started
     env_file:
       - .env

@@ -19,7 +19,7 @@ RUN chmod +x /entrypoint.sh
 # WARP proxy mode usa la porta 40000 di default
 EXPOSE 40000
 
-HEALTHCHECK --interval=10s --timeout=5s --retries=10 \
-    CMD warp-cli status | grep -q "Connected" || exit 1
+# Healthcheck rimosso: warp-cli connect è asincrono e non garantisce
+# Connected entro il timeout. Il depends_on usa service_started.
 
 ENTRYPOINT ["/entrypoint.sh"]
