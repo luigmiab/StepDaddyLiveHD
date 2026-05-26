@@ -1,19 +1,33 @@
 #!/bin/bash
 set -e
 
-# Avvia il demone WARP
-warp-svc --no-autostart &
+# Avvia dbus (richiesto da warp-svc)
+mkdir -p /run/dbus
+dbus-daemon --system --fork || true
+sleep 2
+
+# Avvia il demone WARP in background
+warp-svc &
 sleep 5
 
-# Registra e connetti WARP (solo al primo avvio, ignora errori se già registrato)
-warp-cli --accept-tos register || true
-warp-cli --accept-tos set-mode proxy
-warp-cli --accept-tos proxy port 1080 || true
+# Registra WARP (nuovo comando)
+warp-cli --accept-tos registration new || true
+sleep 2
+
+# Imposta modalità proxy SOCKS5
+warp-cli --accept-tos mode proxy
+sleep 1
+
+# Connetti
 warp-cli --accept-tos connect
 sleep 5
 
-echo "WARP status:"
+echo "=== WARP STATUS ==="
 warp-cli status
 
-# Avvia dante SOCKS5 proxy in foreground
-exec danted -f /etc/danted.conf
+echo "=== WARP PROXY PORT ==="
+# La porta proxy di default è 40000
+warp-cli proxy port || true
+
+# Tieni il container in vita
+tail -f /dev/null

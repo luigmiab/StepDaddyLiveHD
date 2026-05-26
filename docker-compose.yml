@@ -16,8 +16,6 @@ services:
       timeout: 5s
       retries: 10
       start_period: 15s
-    ports:
-      - "1080:1080"
 
   step-daddy-live-hd:
     build:
@@ -27,12 +25,12 @@ services:
         PORT: ${PORT:-3000}
         API_URL: ${API_URL:-}
         PROXY_CONTENT: ${PROXY_CONTENT:-TRUE}
-        SOCKS5: warp:1080
+        SOCKS5: warp:40000
     environment:
       - PORT=${PORT:-3000}
       - API_URL=${API_URL:-}
       - PROXY_CONTENT=${PROXY_CONTENT:-TRUE}
-      - SOCKS5=warp:1080
+      - SOCKS5=warp:40000
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
     restart: unless-stopped
