@@ -94,6 +94,19 @@ class StepDaddy:
         # Fallback: se non trova iframe, usa la pagina stream direttamente
         target_url = player_url or stream_page_url
 
+        # ── DEBUG: scarica l'HTML della player page e loggalo ──────────────
+        if player_url:
+            try:
+                player_response = await self._session.get(
+                    player_url,
+                    headers=self._headers(referer=stream_page_url),
+                    impersonate="chrome120"
+                )
+                print(f"[stream][channel={channel_id}] player HTML:\n{player_response.text[:3000]}")
+            except Exception as e:
+                print(f"[stream][channel={channel_id}] player HTML fetch error: {e}")
+        # ───────────────────────────────────────────────────────────────────
+
         # Step 2: Playwright apre solo il player (molto più leggero)
         async with async_playwright() as p:
             browser = await p.chromium.launch(
