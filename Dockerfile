@@ -35,8 +35,12 @@ RUN REFLEX_API_URL=${API_URL:-http://localhost:$PORT} reflex export --loglevel d
 # Final image with only necessary files
 FROM python:3.13-slim
 
-# Install Caddy and redis server inside image
-RUN apt-get update -y && apt-get install -y caddy redis-server && rm -rf /var/lib/apt/lists/*
+# Install Caddy, redis and Cloudflare WARP
+RUN apt-get update -y && apt-get install -y caddy redis-server curl gpg lsb-release && \
+    curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ bookworm main" > /etc/apt/sources.list.d/cloudflare-client.list && \
+    apt-get update -y && apt-get install -y cloudflare-warp && \
+    rm -rf /var/lib/apt/lists/*
 
 ARG PORT API_URL
 ENV PATH="/app/.venv/bin:$PATH" PORT=$PORT REFLEX_API_URL=${API_URL:-http://localhost:$PORT} REDIS_URL=redis://localhost PYTHONUNBUFFERED=1 PROXY_CONTENT=${PROXY_CONTENT:-TRUE} SOCKS5=${SOCKS5:-""}
@@ -51,6 +55,11 @@ STOPSIGNAL SIGKILL
 EXPOSE $PORT
 
 # Starting the backend.
-CMD caddy start && \
+CMD warp-svc --no-autostart & \
+    sleep 3 && \
+    warp-cli --accept-tos register && \
+    warp-cli --accept-tos connect && \
+    sleep 3 && \
+    caddy start && \
     redis-server --daemonize yes && \
     exec reflex run --env prod --backend-only

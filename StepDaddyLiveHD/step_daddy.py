@@ -21,9 +21,9 @@ class StepDaddy:
     def __init__(self):
         socks5 = config.socks5
         if socks5 != "":
-            self._session = AsyncSession(proxy="socks5://" + socks5)
+            self._session = AsyncSession(impersonate="chrome120", proxy="socks5://" + socks5)
         else:
-            self._session = AsyncSession()
+            self._session = AsyncSession(impersonate="chrome120")
         self._base_url = os.environ.get("DLHD_BASE_URL", "https://dlhd.dad")
         self.channels = []
         with open("StepDaddyLiveHD/meta.json", "r") as f:
