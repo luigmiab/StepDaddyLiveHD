@@ -1,6 +1,6 @@
 import json
 import re
-import reflex as rx
+from pydantic import BaseModel
 from urllib.parse import quote, urlparse
 from curl_cffi import AsyncSession
 from typing import List
@@ -9,7 +9,7 @@ from rxconfig import config
 import html
 
 
-class Channel(rx.Base):
+class Channel(BaseModel):
     id: str
     name: str
     tags: List[str]
