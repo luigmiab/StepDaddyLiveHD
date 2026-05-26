@@ -10,8 +10,12 @@ sleep 2
 warp-svc &
 sleep 5
 
+# Cancella registrazione vecchia se presente (evita "Old registration is still around")
+warp-cli --accept-tos registration delete || true
+sleep 1
+
 # Registra WARP (nuovo comando)
-warp-cli --accept-tos registration new || true
+warp-cli --accept-tos registration new
 sleep 2
 
 # Imposta modalità proxy SOCKS5
@@ -23,11 +27,7 @@ warp-cli --accept-tos connect
 sleep 5
 
 echo "=== WARP STATUS ==="
-warp-cli status
-
-echo "=== WARP PROXY PORT ==="
-# La porta proxy di default è 40000
-warp-cli proxy port || true
+warp-cli --accept-tos status
 
 # Tieni il container in vita
 tail -f /dev/null
