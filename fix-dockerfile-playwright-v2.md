@@ -1,13 +1,26 @@
+# Fix: `playwright install chromium --with-deps` fallisce anche nel builder
+
+## Problema
+
+`python:3.13` (builder) è basata su Debian slim-like — mancano le librerie
+di sistema per Chromium. `--with-deps` tenta di installarle ma non ci riesce
+perché mancano prerequisiti base (`wget`, `ca-certificates`, ecc.).
+
+## Soluzione
+
+Installare le dipendenze di sistema nel builder **prima** di `playwright install`,
+poi usare `--with-deps` normalmente.
+
+## File da modificare: `Dockerfile`
+
+### Contenuto completo corretto
+
+```dockerfile
 ARG PORT=3000
 ARG PROXY_CONTENT=TRUE
 ARG SOCKS5
-
-# Only set for local/direct access. When TLS is used, the API_URL is assumed to be the same as the frontend.
 ARG API_URL
 
-# It uses a reverse proxy to serve the frontend statically and proxy to backend
-# from a single exposed port, expecting TLS termination to be handled at the
-# edge by the given platform.
 FROM python:3.13 AS builder
 
 RUN mkdir -p /app/.web
@@ -16,7 +29,6 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 WORKDIR /app
 
-# Install python app requirements and reflex in the container
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
@@ -26,26 +38,21 @@ RUN apt-get update -y && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Installa Chromium nel builder dentro una path fissa copiabile
+# Installa Chromium in path fissa dentro /app (copiabile nello stage finale)
 ENV PLAYWRIGHT_BROWSERS_PATH=/app/.playwright
 RUN playwright install chromium --with-deps
 
-# Install reflex helper utilities like bun/node
 COPY rxconfig.py ./
 RUN reflex init
 
-# Copy local context to `/app` inside container (see .dockerignore)
 COPY . .
 
 ARG PORT API_URL PROXY_CONTENT SOCKS5
-# Download other npm dependencies and compile frontend
 RUN REFLEX_API_URL=${API_URL:-http://localhost:$PORT} reflex export --loglevel debug --frontend-only --no-zip && mv .web/build/client/* /srv/ && rm -rf .web
 
 
-# Final image with only necessary files
 FROM python:3.13-slim
 
-# Nessun commento inline in apt-get
 RUN apt-get update -y && apt-get install -y \
     caddy \
     redis-server \
@@ -68,7 +75,6 @@ RUN apt-get update -y && apt-get install -y \
     libatspi2.0-0 \
     libwayland-client0 \
     fonts-liberation \
-    wget \
     && rm -rf /var/lib/apt/lists/*
 
 ARG PORT API_URL
@@ -85,12 +91,18 @@ WORKDIR /app
 COPY --from=builder /app /app
 COPY --from=builder /srv /srv
 
-# Needed until Reflex properly passes SIGTERM on backend.
 STOPSIGNAL SIGKILL
-
 EXPOSE $PORT
 
-# Starting the backend.
 CMD caddy start && \
     redis-server --daemonize yes && \
     exec reflex run --env prod --backend-only
+```
+
+## Riepilogo fix
+
+| Problema | Fix |
+|---|---|
+| `--with-deps` fallisce nel builder | Aggiunto `apt-get install wget ca-certificates` prima di `playwright install` |
+| Chromium perso tra gli stage | `PLAYWRIGHT_BROWSERS_PATH=/app/.playwright` → copiato con `COPY --from=builder /app /app` |
+| Dipendenze Chromium nel finale | Installate manualmente senza commenti inline |
