@@ -4,3 +4,4 @@ httpx[http2]==0.28.1
 python-dateutil==2.9.0
 fastapi==0.118.0
 playwright==1.52.0
+playwright-stealth==1.0.6

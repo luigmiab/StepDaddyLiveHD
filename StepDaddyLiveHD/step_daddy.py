@@ -2,6 +2,7 @@ import json
 import os
 import re
 from playwright.async_api import async_playwright
+from playwright_stealth import stealth_async
 from pydantic import BaseModel
 from urllib.parse import quote, urlparse
 from curl_cffi import AsyncSession
@@ -73,13 +74,28 @@ class StepDaddy:
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
-                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    # Nasconde headless mode
+                    "--disable-blink-features=AutomationControlled",
+                ]
             )
             context = await browser.new_context(
-                user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                           "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+                # Sovrascrive Sec-Ch-Ua senza HeadlessChrome
+                extra_http_headers={
+                    "Sec-Ch-Ua": '"Chromium";v="136", "Google Chrome";v="136", "Not.A/Brand";v="99"',
+                    "Sec-Ch-Ua-Mobile": "?0",
+                    "Sec-Ch-Ua-Platform": '"Windows"',
+                }
             )
             page = await context.new_page()
+
+            # Applica stealth per nascondere navigator.webdriver e altri segnali
+            await stealth_async(page)
 
             # Intercetta TUTTE le richieste — logga tutto per debug
             async def handle_request(request):
@@ -110,14 +126,11 @@ class StepDaddy:
 
             # Prova a cliccare il play button se esiste
             for selector in [
-                "button.play",
-                ".play-button",
                 ".vjs-play-button",
                 ".jw-icon-playback",
                 "video",
                 ".jwplayer",
                 "[class*='play']",
-                "iframe"
             ]:
                 try:
                     element = await page.query_selector(selector)
