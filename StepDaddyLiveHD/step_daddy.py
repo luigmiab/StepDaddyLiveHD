@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from pydantic import BaseModel
 from urllib.parse import quote, urlparse
@@ -23,7 +24,7 @@ class StepDaddy:
             self._session = AsyncSession(proxy="socks5://" + socks5)
         else:
             self._session = AsyncSession()
-        self._base_url = "https://dlhd.dad"
+        self._base_url = os.environ.get("DLHD_BASE_URL", "https://dlhd.dad")
         self.channels = []
         with open("StepDaddyLiveHD/meta.json", "r") as f:
             self._meta = json.load(f)
