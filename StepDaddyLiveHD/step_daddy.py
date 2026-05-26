@@ -81,27 +81,69 @@ class StepDaddy:
             )
             page = await context.new_page()
 
-            # Intercetta tutte le richieste di rete
+            # Intercetta TUTTE le richieste — logga tutto per debug
             async def handle_request(request):
                 nonlocal m3u8_url, source_url
                 url = request.url
-                if "mono.m3u8" in url or (url.endswith(".m3u8") and "newkso" in url):
+                # Log ogni richiesta che contiene parole chiave stream
+                if any(ext in url for ext in [".m3u8", ".ts", "stream", "playlist", "manifest"]):
+                    print(f"[playwright][channel={channel_id}] Intercepted: {url}")
+                # Pattern allargato: qualsiasi .m3u8 che non sia la pagina stessa
+                if url.endswith(".m3u8") and stream_page_url not in url:
+                    print(f"[playwright][channel={channel_id}] ✅ Found m3u8: {url}")
                     m3u8_url = url
-                    # Ricava il source_url dal referer della richiesta
                     referer = request.headers.get("referer", "")
                     if referer:
                         source_url = referer
 
             page.on("request", handle_request)
 
-            # Apri la pagina stream — il JS si esegue e genera i token
-            await page.goto(stream_page_url, wait_until="networkidle", timeout=30000)
+            print(f"[playwright][channel={channel_id}] Opening: {stream_page_url}")
+            try:
+                # domcontentloaded è più veloce di networkidle
+                await page.goto(stream_page_url, wait_until="domcontentloaded", timeout=30000)
+            except Exception as e:
+                print(f"[playwright][channel={channel_id}] goto error: {e}")
 
-            # Aspetta fino a 15 secondi che il m3u8 venga intercettato
-            for _ in range(30):
+            # Aspetta che la pagina si stabilizzi
+            await page.wait_for_timeout(3000)
+
+            # Prova a cliccare il play button se esiste
+            for selector in [
+                "button.play",
+                ".play-button",
+                ".vjs-play-button",
+                ".jw-icon-playback",
+                "video",
+                ".jwplayer",
+                "[class*='play']",
+                "iframe"
+            ]:
+                try:
+                    element = await page.query_selector(selector)
+                    if element:
+                        print(f"[playwright][channel={channel_id}] Clicking: {selector}")
+                        await element.click()
+                        await page.wait_for_timeout(1000)
+                        break
+                except Exception:
+                    pass
+
+            # Aspetta fino a 30 secondi che il m3u8 venga intercettato
+            for i in range(60):
                 if m3u8_url:
                     break
                 await page.wait_for_timeout(500)
+                if i % 10 == 0:
+                    print(f"[playwright][channel={channel_id}] Waiting... {i/2}s")
+
+            # Se ancora non trovato, logga il contenuto della pagina
+            if not m3u8_url:
+                try:
+                    content = await page.content()
+                    print(f"[playwright][channel={channel_id}] Page snippet: {content[:1000]}")
+                except Exception:
+                    pass
 
             await browser.close()
 
