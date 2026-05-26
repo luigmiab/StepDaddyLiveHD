@@ -1,3 +1,71 @@
+# Fix: Rimuovi `playwright-stealth` — stealth manuale via `add_init_script`
+
+## Problema
+
+```
+ModuleNotFoundError: No module named 'pkg_resources'
+```
+
+`playwright-stealth==1.0.6` usa internamente `pkg_resources` che non è
+incluso in Python 3.13. La libreria è vecchia e non mantenuta.
+
+## File 1 — `requirements.txt`
+
+### Prima
+```txt
+reflex==0.9.3
+curl-cffi==0.13.0
+httpx[http2]==0.28.1
+python-dateutil==2.9.0
+fastapi==0.118.0
+playwright==1.52.0
+playwright-stealth==1.0.6
+```
+
+### Dopo
+```txt
+reflex==0.9.3
+curl-cffi==0.13.0
+httpx[http2]==0.28.1
+python-dateutil==2.9.0
+fastapi==0.118.0
+playwright==1.52.0
+```
+
+---
+
+## File 2 — `StepDaddyLiveHD/step_daddy.py`
+
+### Rimuovi riga 5
+```python
+# RIMUOVI questa riga
+from playwright_stealth import stealth_async
+```
+
+### Rimuovi riga 98
+```python
+# RIMUOVI questa riga
+await stealth_async(page)
+```
+
+### Aggiungi stealth manuale dopo `page = await context.new_page()` (riga 95)
+```python
+page = await context.new_page()
+
+# Stealth manuale — nasconde navigator.webdriver e HeadlessChrome
+await page.add_init_script("""
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    window.chrome = { runtime: {} };
+    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+""")
+```
+
+---
+
+## Contenuto completo `step_daddy.py` dopo il fix
+
+```python
 import json
 import os
 import re
@@ -57,11 +125,9 @@ class StepDaddy:
                 if logo:
                     logo = f"{config.api_url}/logo/{urlsafe_base64(logo)}"
                 channels.append(Channel(id=channel_id, name=channel_name, tags=meta.get("tags", []), logo=logo))
-            # Aggiorna solo se il fetch è andato a buon fine
             self.channels = sorted(channels, key=lambda channel: (channel.name.startswith("18"), channel.name))
             print(f"[load_channels] Loaded {len(self.channels)} channels.")
         except Exception as e:
-            # NON azzera self.channels — mantiene i canali precedenti se disponibili
             print(f"[load_channels] Error loading channels: {e}")
             raise
 
@@ -77,14 +143,12 @@ class StepDaddy:
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
-                    # Nasconde headless mode
                     "--disable-blink-features=AutomationControlled",
                 ]
             )
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                            "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
-                # Sovrascrive Sec-Ch-Ua senza HeadlessChrome
                 extra_http_headers={
                     "Sec-Ch-Ua": '"Chromium";v="136", "Google Chrome";v="136", "Not.A/Brand";v="99"',
                     "Sec-Ch-Ua-Mobile": "?0",
@@ -101,14 +165,11 @@ class StepDaddy:
                 Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
             """)
 
-            # Intercetta TUTTE le richieste — logga tutto per debug
             async def handle_request(request):
                 nonlocal m3u8_url, source_url
                 url = request.url
-                # Log ogni richiesta che contiene parole chiave stream
                 if any(ext in url for ext in [".m3u8", ".ts", "stream", "playlist", "manifest"]):
                     print(f"[playwright][channel={channel_id}] Intercepted: {url}")
-                # Pattern allargato: qualsiasi .m3u8 che non sia la pagina stessa
                 if url.endswith(".m3u8") and stream_page_url not in url:
                     print(f"[playwright][channel={channel_id}] ✅ Found m3u8: {url}")
                     m3u8_url = url
@@ -120,15 +181,12 @@ class StepDaddy:
 
             print(f"[playwright][channel={channel_id}] Opening: {stream_page_url}")
             try:
-                # domcontentloaded è più veloce di networkidle
                 await page.goto(stream_page_url, wait_until="domcontentloaded", timeout=30000)
             except Exception as e:
                 print(f"[playwright][channel={channel_id}] goto error: {e}")
 
-            # Aspetta che la pagina si stabilizzi
             await page.wait_for_timeout(3000)
 
-            # Prova a cliccare il play button se esiste
             for selector in [
                 ".vjs-play-button",
                 ".jw-icon-playback",
@@ -146,7 +204,6 @@ class StepDaddy:
                 except Exception:
                     pass
 
-            # Aspetta fino a 30 secondi che il m3u8 venga intercettato
             for i in range(60):
                 if m3u8_url:
                     break
@@ -154,7 +211,6 @@ class StepDaddy:
                 if i % 10 == 0:
                     print(f"[playwright][channel={channel_id}] Waiting... {i/2}s")
 
-            # Se ancora non trovato, logga il contenuto della pagina
             if not m3u8_url:
                 try:
                     content = await page.content()
@@ -170,7 +226,6 @@ class StepDaddy:
         if not source_url:
             source_url = stream_page_url
 
-        # Scarica il contenuto m3u8 intercettato
         m3u8 = await self._session.get(
             m3u8_url,
             headers=self._headers(referer=source_url),
@@ -213,3 +268,15 @@ class StepDaddy:
     async def schedule(self):
         response = await self._session.get(f"{self._base_url}/schedule/schedule-generated.php", headers=self._headers())
         return response.json()
+```
+
+---
+
+## Riepilogo modifiche
+
+| File | Modifica |
+|---|---|
+| `requirements.txt` | Rimossa riga `playwright-stealth==1.0.6` |
+| `step_daddy.py` | Rimosso `import playwright_stealth` |
+| `step_daddy.py` | Rimosso `await stealth_async(page)` |
+| `step_daddy.py` | Aggiunto `await page.add_init_script(...)` con patch JS manuale |
