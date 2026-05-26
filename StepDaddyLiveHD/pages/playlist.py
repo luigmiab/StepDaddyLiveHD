@@ -27,9 +27,9 @@ def playlist() -> rx.Component:
                                 background_color=rx.color("accent", 7),
                             ),
                         ),
-                        rx.heading("Welcome to Stream4Manager", size="7", margin_bottom="1rem"),
+                        rx.heading("Welcome to StepDaddyLiveHD", size="7", margin_bottom="1rem"),
                         rx.text(
-                            "Stream4Manager allows you to watch various TV channels via IPTV. "
+                            "StepDaddyLiveHD allows you to watch various TV channels via IPTV. "
                             "You can download the playlist file below and use it with your favorite media player.",
                         ),
 
